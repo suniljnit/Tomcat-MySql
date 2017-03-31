@@ -1,6 +1,6 @@
 # Centos based container with Java and Tomcat
 FROM centos:latest
-MAINTAINER ttadepalli86
+MAINTAINER sunilkamineni
 
 # Install prepare infrastructure
 RUN yum -y update && \
@@ -47,30 +47,35 @@ RUN groupadd -r tomcat && \
 
 WORKDIR /opt/tomcat
 
-EXPOSE 8080
-EXPOSE 8009
+EXPOSE 8080 8009
 
 USER tomcat
 CMD ["tomcat.sh"]
 
 # Install MySql
-ENV MYSQL_USER=mysql \
-    MYSQL_DATA_DIR=/var/lib/mysql \
-    MYSQL_RUN_DIR=/run/mysqld \
-    MYSQL_LOG_DIR=/var/log/mysql
+RUN yum -y install /sbin/service which nano openssh-server git mysql-server mysql php-mysql
 
-RUN wget https://dev.mysql.com/get/mysql57-community-release-el7-9.noarch.rpm
-RUN rpm -ivh mysql57-community-release-el7-9.noarch.rpm
+# setup the services to start on the container bootup
+RUN chkconfig mysqld on
 
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server \
- && rm -rf ${MYSQL_DATA_DIR} \
- && rm -rf /var/lib/apt/lists/*
+#allow the ssh root access.. - Diable if you dont need but for our containers we prefer SSH access.
+#RUN sed -i "s/UsePAM.*/UsePAM no/g" /etc/ssh/sshd_config
+#RUN sed -i "s/#PermitRootLogin/PermitRootLogin/g" /etc/ssh/sshd_config
 
-COPY entrypoint.sh /sbin/entrypoint.sh
-RUN chmod 755 /sbin/entrypoint.sh
+#cron needs this fix
+#RUN sed -i '/session    required   pam_loginuid.so/c\#session    required   pam_loginuid.so' /etc/pam.d/crond
 
-EXPOSE 3306
-VOLUME ["${MYSQL_DATA_DIR}", "${MYSQL_RUN_DIR}"]
-ENTRYPOINT ["/sbin/entrypoint.sh"]
-CMD ["/usr/bin/mysqld_safe"]
+RUN echo 'root:ch@ngem3' | chpasswd
+
+RUN mkdir /scripts
+ADD mysqlsetup.sh /scripts/mysqlsetup.sh
+RUN chmod 0755 /scripts/*
+
+RUN echo "/scripts/mysqlsetup.sh" >> /etc/rc.d/rc.local
+
+RUN chmod 0600 /etc/backup.* -R
+
+
+EXPOSE 22 80 8000 3306 443
+
+CMD ["/sbin/init"]
