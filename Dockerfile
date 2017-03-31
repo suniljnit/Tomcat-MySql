@@ -1,53 +1,76 @@
-FROM centos:centos6
+# Centos based container with Java and Tomcat
+FROM centos:latest
+MAINTAINER ttadepalli86
 
-MAINTAINER paimpozhil@gmail.com
+# Install prepare infrastructure
+RUN yum -y update && \
+ yum -y install wget && \
+ yum -y install tar
 
-# Centos default image for some reason does not have tools like Wget/Tar/etc so lets add them
-RUN yum -y install wget
+# Prepare environment 
+ENV JAVA_HOME /opt/java
+ENV CATALINA_HOME /opt/tomcat 
+ENV PATH $PATH:$JAVA_HOME/bin:$CATALINA_HOME/bin:$CATALINA_HOME/scripts
 
-RUN wget -O- https://raw.github.com/Eugeny/ajenti/master/scripts/install-rhel.sh | sh
+# Install Oracle Java8
+ENV JAVA_VERSION 8u112
+ENV JAVA_BUILD 8u112-b15
 
-# install the Mysql / php / git / cron / duplicity / backup ninja
-RUN yum -y install /sbin/service which nano openssh-server git mysql-server mysql php-mysql \
-			  php-gd php-mcrypt php-zip php-xml php-iconv php-curl php-soap php-simplexml \
-			  php-pdo php-dom php-cli tar dbus-python.x86_64 dbus-python-devel.x86_64 dbus \
-			  php-hash php-mysql vixie-cron backupninja duplicity dialog
-
-#work around the vsftpd 3.0.2 dependency  issue
-RUN yum -y install http://mirror.neu.edu.cn/CentALT/6/x86_64/vsftpd-3.0.2-2.el6.x86_64.rpm
-
-#install Ajenti the control panel
-RUN yum -y install ajenti-v ajenti-v-ftp-vsftpd ajenti-v-php-fpm ajenti-v-mysql
-
-## fix the locale problems iwth default centos image.. may not be necessary in future. 
-RUN yum -y reinstall glibc-common
-
-# setup the services to start on the container bootup
-RUN chkconfig mysqld on && chkconfig nginx on && chkconfig php-fpm on && chkconfig crond on && chkconfig ajenti on
-
-# defaut centos image seems to have issues with few missing files from this library
-RUN rpm --nodeps -e cracklib-dicts-2.8.16-4.el6.x86_64
-RUN yum -y install cracklib-dicts.x86_64
-
-#allow the ssh root access.. - Diable if you dont need but for our containers we prefer SSH access.
-RUN sed -i "s/UsePAM.*/UsePAM no/g" /etc/ssh/sshd_config
-RUN sed -i "s/#PermitRootLogin/PermitRootLogin/g" /etc/ssh/sshd_config
-
-#cron needs this fix
-RUN sed -i '/session    required   pam_loginuid.so/c\#session    required   pam_loginuid.so' /etc/pam.d/crond
-
-RUN echo 'root:ch@ngem3' | chpasswd
-
-RUN mkdir /scripts
-ADD mysqlsetup.sh /scripts/mysqlsetup.sh
-RUN chmod 0755 /scripts/*
-
-RUN echo "/scripts/mysqlsetup.sh" >> /etc/rc.d/rc.local
-
-RUN chmod 0600 /etc/backup.* -R
+RUN wget --no-check-certificate --no-cookies --header "Cookie: oraclelicense=accept-securebackup-cookie" \
+ http://download.oracle.com/otn-pub/java/jdk/${JAVA_BUILD}/jdk-${JAVA_VERSION}-linux-x64.tar.gz && \
+ tar -xvf jdk-${JAVA_VERSION}-linux-x64.tar.gz && \
+ rm jdk*.tar.gz && \
+ mv jdk* ${JAVA_HOME}
 
 
-EXPOSE 22 80 8000 3306 443
+# Install Tomcat
+ENV TOMCAT_MAJOR 8
+ENV TOMCAT_VERSION 8.5.12
 
-CMD ["/sbin/init"]
+#RUN wget http://ftp.riken.jp/net/apache/tomcat/tomcat-${TOMCAT_MAJOR}/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+RUN wget http://mirrors.koehn.com/apache/tomcat/tomcat-${TOMCAT_MAJOR}/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+ tar -xvf apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+ rm apache-tomcat*.tar.gz && \
+ mv apache-tomcat* ${CATALINA_HOME}
 
+RUN chmod +x ${CATALINA_HOME}/bin/*sh
+
+# Create Tomcat admin user
+ADD create_admin_user.sh $CATALINA_HOME/scripts/create_admin_user.sh
+ADD tomcat.sh $CATALINA_HOME/scripts/tomcat.sh
+RUN chmod +x $CATALINA_HOME/scripts/*.sh
+
+# Create tomcat user
+RUN groupadd -r tomcat && \
+ useradd -g tomcat -d ${CATALINA_HOME} -s /sbin/nologin  -c "Tomcat user" tomcat && \
+ chown -R tomcat:tomcat ${CATALINA_HOME}
+
+WORKDIR /opt/tomcat
+
+EXPOSE 8080
+EXPOSE 8009
+
+USER tomcat
+CMD ["tomcat.sh"]
+
+# Install MySql
+ENV MYSQL_USER=mysql \
+    MYSQL_DATA_DIR=/var/lib/mysql \
+    MYSQL_RUN_DIR=/run/mysqld \
+    MYSQL_LOG_DIR=/var/log/mysql
+
+RUN wget https://dev.mysql.com/get/mysql57-community-release-el7-9.noarch.rpm
+RUN rpm -ivh mysql57-community-release-el7-9.noarch.rpm
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server \
+ && rm -rf ${MYSQL_DATA_DIR} \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY entrypoint.sh /sbin/entrypoint.sh
+RUN chmod 755 /sbin/entrypoint.sh
+
+EXPOSE 3306
+VOLUME ["${MYSQL_DATA_DIR}", "${MYSQL_RUN_DIR}"]
+ENTRYPOINT ["/sbin/entrypoint.sh"]
+CMD ["/usr/bin/mysqld_safe"]
